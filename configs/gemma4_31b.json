@@ -1,0 +1,12 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "backend": "vllm",
+  "thinking": "off",
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "seed": 42,
+  "dtype": "bfloat16",
+  "max_model_length": 32768,
+  "max_output_tokens": 2048
+}

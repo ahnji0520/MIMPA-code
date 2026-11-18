@@ -1,0 +1,8 @@
+{
+  "source": "sylinrl/TruthfulQA TruthfulQA.csv",
+  "split": "full generation set",
+  "pool_size": 790,
+  "sample_size": 100,
+  "seed": 42,
+  "construction": "Best Answer paired with Best Incorrect Answer; option order randomized deterministically"
+}

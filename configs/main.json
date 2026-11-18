@@ -1,0 +1,36 @@
+{
+  "seed": 42,
+  "sample_size": 100,
+  "stream_length": 10,
+  "rounds": 2,
+  "agents": 3,
+  "malicious_agent_index": 2,
+  "planting_opportunities": 3,
+  "datasets": [
+    "mmlu_pro",
+    "truthfulqa",
+    "medmcqa"
+  ],
+  "conditions": [
+    "clean",
+    "mac_attack",
+    "autotransform",
+    "mimpa_wo_poisoned_record",
+    "mimpa_wo_triggering",
+    "mimpa"
+  ],
+  "basic_memory": {
+    "retrieval_top_k": 3,
+    "store_only_successful": true
+  },
+  "gmemory": {
+    "trajectory_top_k": 1,
+    "insight_top_k": 3,
+    "threshold": 0.0,
+    "hop": 1,
+    "start_insights_at": 5,
+    "refresh_every": 5,
+    "insight_points": 5,
+    "manager_prompt_mode": "qa_adapted"
+  }
+}

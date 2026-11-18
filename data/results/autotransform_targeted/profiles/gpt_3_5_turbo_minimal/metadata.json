@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "artifact_type": "autotransform_profile",
+  "profile_variant": "minimal",
+  "model": "gpt-3.5-turbo",
+  "source_profile_sha256": "ea043378874f9f62c5f3996ef9e0b57a2a04440e5189b1ad879671d0349623ad",
+  "upstream_template_sha256": "be8462db8488332ee878718f72348ed64baab05ed2bcdbaf2effe06e058e703c",
+  "transform_request_sha256": "8d43ffd14704f7bee1ac65377d39447b51da230f96def6b9eab38c6624c096ca",
+  "transformed_profile_sha256": "32c1971608a1c8023547e4e8d61b91ce362aedff5c04baa20ddd91049cc02fb8"
+}

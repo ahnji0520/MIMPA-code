@@ -1,0 +1,614 @@
+diff --git a/mas/__init__.py b/mas/__init__.py
+index ba1762e..38185f3 100644
+--- a/mas/__init__.py
++++ b/mas/__init__.py
+@@ -1,6 +1,9 @@
+ import os
+ from dotenv import load_dotenv
+ load_dotenv()
++load_dotenv("template.env", override=False)
+ 
+-os.environ["OPENAI_API_BASE"] = os.getenv("OPENAI_API_BASE")
+-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+\ No newline at end of file
++for key in ("OPENAI_API_BASE", "OPENAI_API_KEY"):
++    value = os.getenv(key)
++    if value is not None:
++        os.environ[key] = value
+diff --git a/mas/agents/base.py b/mas/agents/base.py
+index 4cf4776..d2114b2 100644
+--- a/mas/agents/base.py
++++ b/mas/agents/base.py
+@@ -30,7 +30,10 @@ class Agent:
+         self.total_system_instruction: str = self.system_instruction
+     
+     def add_task_instruction(self, task_instruction: str) -> str:
+-        self.total_system_instruction = self.system_instruction + '\n' + task_instruction
++        if task_instruction.strip():
++            self.total_system_instruction = self.system_instruction + '\n' + task_instruction
++        else:
++            self.total_system_instruction = self.system_instruction
+         return self.total_system_instruction
+ 
+     def response(self, user_prompt: str, reason_config: ReasoningConfig) -> str:
+@@ -51,4 +54,4 @@ class Env:
+         pass
+ 
+     def step(self, action: str) -> None:
+-        pass
+\ No newline at end of file
++        pass
+diff --git a/mas/llm.py b/mas/llm.py
+index 037e1b8..343b133 100644
+--- a/mas/llm.py
++++ b/mas/llm.py
+@@ -20,10 +20,18 @@ MAX_TOKEN = LLM_CONFIG.get("max_token", 512)
+ TEMPERATURE = LLM_CONFIG.get("temperature", 0.1)
+ NUM_COMPS = LLM_CONFIG.get("num_comps", 1)
+ 
+-URL = os.environ["OPENAI_API_BASE"]
++URL = os.getenv("OPENAI_API_BASE") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
++if URL.strip().startswith("<") and URL.strip().endswith(">"):
++    URL = "https://api.openai.com/v1"
+ KEY = os.environ["OPENAI_API_KEY"]
+ print('# api url: ', URL)
+-print('# api key: ', KEY)
++
++def _mask_secret(secret: str) -> str:
++    if len(secret) <= 8:
++        return '*' * len(secret)
++    return f'{secret[:4]}...{secret[-4:]}'
++
++print('# api key: ', _mask_secret(KEY))
+ 
+ 
+ completion_tokens, prompt_tokens = 0, 0
+@@ -70,6 +78,29 @@ class GPTChat(LLM):
+             api_key=KEY
+         )
+ 
++    def _completion_kwargs(
++        self,
++        messages: list[dict[str, str]],
++        temperature: float = TEMPERATURE,
++        max_tokens: int = MAX_TOKEN,
++        stop_strs: Optional[List[str]] = None,
++        num_comps: int = NUM_COMPS
++    ) -> dict:
++        kwargs = {
++            "model": self.model_name,
++            "messages": messages,
++            "n": num_comps,
++        }
++        if self.model_name.lower().startswith("gpt-5"):
++            if max_tokens is not None:
++                kwargs["max_completion_tokens"] = max_tokens
++        else:
++            kwargs["max_tokens"] = max_tokens
++            kwargs["temperature"] = temperature
++            if stop_strs is not None:
++                kwargs["stop"] = stop_strs
++        return kwargs
++
+     def __call__(
+         self,
+         messages: List[Message],
+@@ -89,12 +120,13 @@ class GPTChat(LLM):
+         for attempt in range(max_retries):
+             try:
+                 response = self.client.chat.completions.create(
+-                    model=self.model_name,  
+-                    messages=messages,
+-                    max_tokens=max_tokens,
+-                    temperature=temperature,
+-                    n=num_comps,
+-                    stop=stop_strs
++                    **self._completion_kwargs(
++                        messages,
++                        temperature=temperature,
++                        max_tokens=max_tokens,
++                        stop_strs=stop_strs,
++                        num_comps=num_comps
++                    )
+                 )
+ 
+                 answer = response.choices[0].message.content
+diff --git a/mas/memory/common.py b/mas/memory/common.py
+index 005e5f6..de0faf3 100644
+--- a/mas/memory/common.py
++++ b/mas/memory/common.py
+@@ -129,7 +129,15 @@ class StateChain:
+     @staticmethod
+     def from_str(state_chain_str: str) -> "StateChain":
+         state_chain = StateChain()
+-        state_chain._chain_of_states = [json_graph.node_link_graph(state_data) for state_data in json.loads(state_chain_str)]
++        saved_states = json.loads(state_chain_str or "[]")
++        state_chain._chain_of_states = [
++            json_graph.node_link_graph(state_data)
++            for state_data in saved_states
++        ]
++
++        current_state = nx.DiGraph()
++        current_state.graph["name_counter"] = {}
++        state_chain._chain_of_states.append(current_state)
+         return state_chain
+ 
+ 
+@@ -188,4 +196,4 @@ class MASMessage:
+             label=message_dict.get("label"),
+             extra_fields=json.loads(message_dict.get("extra_fields", "{}")),
+             chain_of_states=StateChain.from_str(message_dict.get('state_chain'))
+-        )
+\ No newline at end of file
++        )
+diff --git a/mas/memory/mas_memory/GMemory.py b/mas/memory/mas_memory/GMemory.py
+index 75e0251..082d451 100644
+--- a/mas/memory/mas_memory/GMemory.py
++++ b/mas/memory/mas_memory/GMemory.py
+@@ -56,7 +56,8 @@ class GMemory(MASMemoryBase):
+             namespace='insights', 
+             llm_model=self.llm_model, 
+             task_storage=self.main_memory,
+-            task_layer=self.task_layer
++            task_layer=self.task_layer,
++            random_seed=int(self.global_config.get('random_seed', 42)),
+         )
+ 
+         self.insights_cache: list[str] = []
+@@ -101,6 +102,14 @@ class GMemory(MASMemoryBase):
+             self.main_memory.add_documents([memory_doc])
+         else:
+             raise ValueError('The mas_message must have label!')
++
++        seed_insights: list[str] = mas_message.get_extra_field('seed_insights') or []
++        if seed_insights:
++            self.insights_layer.add_seed_insights(
++                seed_insights,
++                task_main=mas_message.task_main,
++                label=mas_message.label
++            )
+         
+         # finetune and merge insights
+         if self.memory_size >= self._start_insights_threshold and self.memory_size % self._rounds_per_insights == 0:
+@@ -121,8 +130,8 @@ class GMemory(MASMemoryBase):
+ 
+         def sort_and_filter_by_similarity(docs: list[Document], threshold: float = 0.3) -> list[tuple[Document, float]]:
+             result = []
+-            for doc in docs:
+-                embedding = self.embedding_func.embed_query(doc.page_content)
++            embeddings = self.embedding_func.embed_documents([doc.page_content for doc in docs])
++            for doc, embedding in zip(docs, embeddings):
+                 sim = cosine_similarity(origin_embedding, embedding)
+                 if sim >= threshold:
+                     result.append((doc, sim))
+@@ -250,15 +259,13 @@ class GMemory(MASMemoryBase):
+             if state_chain.get_state(state_id).graph.get('reward', 0) < 0:
+                 state_chain.pop_state(state_id)
+         
+-        trajectory = ''
+-        for state in state_chain:
+-            trajectory += f'> {state.graph['action']}\n{state.graph['observation']}\n'
++        trajectory = self._format_state_chain_trajectory(state_chain)
+         
+-        if mas_message_copy.label == True:
+-            mas_message_copy.task_trajectory = trajectory
++        # In the QA adaptation, agent utterances live in the interaction graph
++        # rather than MASMessage.move_state(). Preserve the rendered graph for
++        # both outcomes so failed trials remain usable by insight induction.
++        mas_message_copy.task_trajectory = trajectory
+ 
+-        
+-        trajectory = re.sub(r'\d+', '', trajectory)
+         mas_message_copy.add_extra_field('clean_traj', trajectory)
+ 
+ 
+@@ -279,6 +286,21 @@ class GMemory(MASMemoryBase):
+             mas_message_copy.add_extra_field('fail_reason', reason)
+         
+         return mas_message_copy
++
++    @staticmethod
++    def _format_state_chain_trajectory(state_chain: StateChain) -> str:
++        # Preserve the upstream trajectory convention (`> step` followed by
++        # its content) while adapting a step from an environment action to a
++        # debate-agent utterance. Synthetic aggregation/outcome labels are not
++        # exposed in the retrieved prompt.
++        trajectory = ''
++        for state in state_chain:
++            for _, node in state.nodes(data=True):
++                agent_name = node.get('agent_name') or 'agent'
++                message = (node.get('message') or '').strip()
++                if message:
++                    trajectory += f'> {agent_name}\n{message}\n'
++        return trajectory.strip()
+     
+     
+     def _detect_mistakes(self, mas_message: MASMessage) -> str:
+@@ -431,14 +453,8 @@ class TaskLayer:
+         """
+         nodes = list(self.graph.nodes)
+ 
+-        embeddings = []
+-        valid_nodes = []
+-
+-        for node in nodes:
+-            embedding = self.task_storage._embedding_function.embed_query(node)  
+-            if embedding is not None:
+-                embeddings.append(embedding)
+-                valid_nodes.append(node)
++        embeddings = self.task_storage._embedding_function.embed_documents(nodes)
++        valid_nodes = nodes[:len(embeddings)]
+ 
+         X = np.vstack(embeddings)
+         fin = FINCH(metric='cosine')
+@@ -472,6 +488,7 @@ class InsightsManager:
+     llm_model: LLMCallable
+     task_storage: Chroma
+     task_layer: TaskLayer
++    random_seed: int = 42
+     def __post_init__(self):
+         self.persist_file: str = os.path.join(self.working_dir,f'{self.namespace}.json')
+         self.insights_memory: list[dict] = load_json(self.persist_file) or []
+@@ -485,6 +502,36 @@ class InsightsManager:
+             ]
+         )
+         self.logger = logging.getLogger(__name__)
++        self._rng = random.Random(self.random_seed)
++
++    def add_seed_insights(self, insights: list[str], task_main: str, label: bool) -> None:
++        for rule in insights:
++            rule = rule.strip()
++            if not rule:
++                continue
++
++            matched = None
++            for insight in self.insights_memory:
++                if insight.get('rule') == rule:
++                    matched = insight
++                    break
++
++            if matched is None:
++                matched = {
++                    'rule': rule,
++                    'score': 1,
++                    'positive_correlation_tasks': [],
++                    'negative_correlation_tasks': []
++                }
++                self.insights_memory.append(matched)
++            else:
++                matched['score'] += 1
++
++            key = 'positive_correlation_tasks' if label else 'negative_correlation_tasks'
++            if task_main not in matched[key]:
++                matched[key].append(task_main)
++
++        self._index_done()
+         
+ 
+     def query_insights_with_score(self, task_query: str, top_k: int = None) -> list[tuple[str, float]]:
+@@ -651,7 +698,7 @@ class InsightsManager:
+         all_ids = self.task_storage.get()['ids']
+         for _ in range(num_points):  
+ 
+-            random_id = random.choice(all_ids)
++            random_id = self._rng.choice(all_ids)
+             random_entry = self.task_storage.get(ids=[random_id])
+             if 'metadatas' in random_entry and random_entry['metadatas']:
+                 random_metadata = random_entry['metadatas'][0]  
+@@ -708,7 +755,11 @@ class InsightsManager:
+             success_task = successful_task_trajectories[id]
+             compare_pairs.append((success_task, fail_task))
+         
+-        successful_task_chunks: list[list[MASMessage]] = random_divide_list(successful_task_trajectories, 5) 
++        shuffled_successes = list(successful_task_trajectories)
++        self._rng.shuffle(shuffled_successes)
++        successful_task_chunks: list[list[MASMessage]] = [
++            shuffled_successes[i:i + 5] for i in range(0, len(shuffled_successes), 5)
++        ]
+         
+         MAX_RULE_THRESHOLD: int = 10
+         suffix: str = GMemoryPrompts.finetune_insights_suffix['full'] if len(self.insights_memory) > MAX_RULE_THRESHOLD \
+@@ -756,8 +807,9 @@ class InsightsManager:
+     def _build_comparative_prompts(self, true_traj: MASMessage, false_traj: MASMessage, insights: list[dict]) -> list[Message]:
+         existing_rules: list[str] = [insight['rule'] for insight in insights]
+         if len(existing_rules) == 0:
+-            existing_rules.append('')
+-        rule_text: str = '\n'.join([f'{i}. {r}' for i, r in enumerate(existing_rules, 1)])
++            rule_text = '(No existing rules. Use ADD for each new rule.)'
++        else:
++            rule_text = '\n'.join([f'{i}. {r}' for i, r in enumerate(existing_rules, 1)])
+ 
+         prompt = GMemoryPrompts.critique_compare_rules_user_prompt.format(   
+             task1=true_traj.task_description,
+@@ -778,8 +830,9 @@ class InsightsManager:
+ 
+         existing_rules: list[str] = [insight['rule'] for insight in insights]
+         if len(existing_rules) == 0:
+-            existing_rules.append('')
+-        rule_text: str = '\n'.join([f'{i}. {r}' for i, r in enumerate(existing_rules, 1)])
++            rule_text = '(No existing rules. Use ADD for each new rule.)'
++        else:
++            rule_text = '\n'.join([f'{i}. {r}' for i, r in enumerate(existing_rules, 1)])
+ 
+         history: list[str] = [f'task{i}:\n' + task.task_description + task.get_extra_field('key_steps') for i, task in enumerate(success_trajectories)]
+         prompt = GMemoryPrompts.critique_success_rules_user_prompt.format(
+@@ -889,4 +942,4 @@ class InsightsManager:
+         for idx, insight in enumerate(self.insights_memory):
+             if insight['rule'] in operation_rule_text:
+                 return idx
+-        return -1
+\ No newline at end of file
++        return -1
+diff --git a/mas/memory/mas_memory/prompt.py b/mas/memory/mas_memory/prompt.py
+index 5d895eb..76465ba 100644
+--- a/mas/memory/mas_memory/prompt.py
++++ b/mas/memory/mas_memory/prompt.py
+@@ -296,6 +296,24 @@ Now it's your turn!
+ ### Output
+ """
+ 
++extract_true_traj_user_prompt_original = extract_true_traj_user_prompt
++extract_true_traj_user_prompt = """
++Note:
++- Strictly follow the original trajectory; absolutely no steps that are not in the trajectory should be added.
++- Even in a successful trajectory, there may be some incorrect steps. Pay attention to actions that correspond to "Nothing happens" observations, as these actions are likely incorrect. Filter out these actions for me.
++- You need to ensure that each step is at the finest granularity.
++
++## Here is the task:
++
++### Task
++{task}
++
++### Trajectory
++{trajectory}
++
++### Output
++"""
++
+ # Insights
+ finetune_insights_suffix = dict(full = """Focus on REMOVE or EDIT or AGREE rules first, and stop ADD rule unless the new rule is VERY insightful and different from EXISTING RULES.
+ """, not_full = """""")
+@@ -345,6 +363,10 @@ By examining and contrasting to the successful trial, and the list of existing r
+ critique_success_rules_system_prompt = """You are an advanced reasoning agent that can add, edit or remove rules from your existing rule set, based on forming new critiques of past task trajectories. 
+ You will be given successful tasks trials in which you were placed in a household environment and tasks to complete."""
+ 
++critique_success_rules_system_prompt_original = critique_success_rules_system_prompt
++critique_success_rules_system_prompt = """You are an advanced reasoning agent that can add, edit or remove rules from your existing rule set, based on forming new critiques of past task trajectories. 
++You will be given successful task trials to complete."""
++
+ critique_success_rules_user_prompt = """
+ ## Requirements:  
+ - Avoid vague statements; ensure each insight has a clear causal relationship.  
+@@ -390,6 +412,33 @@ This is a failed trajectory.:
+ Your output:
+ """
+ 
++detect_mistakes_system_prompt_original = detect_mistakes_system_prompt
++detect_mistakes_user_prompt_original = detect_mistakes_user_prompt
++detect_mistakes_system_prompt = """You are an analytical agent. You will be given a task specification and a failed trajectory.
++
++Carefully analyze the trajectory and compare its final outcome with the required outcome. Identify the most likely reason why the task failed.
++
++Consider whether:
++
++- The trajectory correctly understood the task requirements.
++- The actions or decisions were appropriate and complete.
++- Any required step, condition, or constraint was missed.
++- An intermediate error led to the incorrect final outcome.
++
++Summarize the most likely reason for the error in a concise manner."""
++
++detect_mistakes_user_prompt = """
++Identify why the failed trajectory does not satisfy the task objective.
++
++## Task
++{task}
++
++## Failed trajectory
++{trajectory}
++
++Your output:
++"""
++
+ # merge rules
+ merge_rules_system_prompt = """You are an agent skilled at summarizing and distilling insights. You are given a list of insights that were previously extracted from similar tasks. These insights may contain redundancy or overlap.
+ 
+@@ -500,13 +549,17 @@ class GMemoryPrompt:
+     generative_task_user_prompt = generative_task_user_prompt
+     extract_true_traj_system_prompt = extract_true_traj_system_prompt
+     extract_true_traj_user_prompt = extract_true_traj_user_prompt
++    extract_true_traj_user_prompt_original = extract_true_traj_user_prompt_original
+     finetune_insights_suffix = finetune_insights_suffix
+     critique_compare_rules_system_prompt = critique_compare_rules_system_prompt
+     critique_compare_rules_user_prompt = critique_compare_rules_user_prompt
+     critique_success_rules_system_prompt = critique_success_rules_system_prompt
++    critique_success_rules_system_prompt_original = critique_success_rules_system_prompt_original
+     critique_success_rules_user_prompt = critique_success_rules_user_prompt
+     detect_mistakes_system_prompt = detect_mistakes_system_prompt
++    detect_mistakes_system_prompt_original = detect_mistakes_system_prompt_original
+     detect_mistakes_user_prompt = detect_mistakes_user_prompt
++    detect_mistakes_user_prompt_original = detect_mistakes_user_prompt_original
+     merge_rules_system_prompt = merge_rules_system_prompt
+     merge_rules_user_prompt = merge_rules_user_prompt
+     analyze_mas_pattern_system_prompt=analyze_mas_pattern_system_prompt
+@@ -517,4 +570,4 @@ class GMemoryPrompt:
+     project_insights_with_traj_user_prompt=project_insights_with_traj_user_prompt
+ 
+ 
+-GMemoryPrompts = GMemoryPrompt()
+\ No newline at end of file
++GMemoryPrompts = GMemoryPrompt()
+diff --git a/mas/utils.py b/mas/utils.py
+index 4cbe55b..3108f28 100644
+--- a/mas/utils.py
++++ b/mas/utils.py
+@@ -6,6 +6,12 @@ import random
+ import json
+ from dataclasses import dataclass
+ import math
++from collections import OrderedDict
++
++try:
++    import torch
++except ImportError:
++    torch = None
+ 
+ 
+ def load_config(config_path: str):
+@@ -49,7 +55,55 @@ def random_divide_list(lst: list[Any], k: int) -> list[list]:
+         return [lst[i*chunk_size:(i+1)*chunk_size] for i in range(num_chunks)]
+     
+ 
+-_EMBEDDING_MODEL_CACHE = {} 
++_EMBEDDING_MODEL_CACHE = {}
++_EMBEDDING_VECTOR_CACHE = OrderedDict()
++
++
++def _embedding_cache_size() -> int:
++    raw_size = os.environ.get("GMEMORY_EMBED_CACHE_SIZE", "10000")
++    try:
++        return max(int(raw_size), 0)
++    except ValueError:
++        return 10000
++
++
++def _embedding_batch_size() -> int:
++    raw_size = os.environ.get("GMEMORY_EMBED_BATCH_SIZE", "32")
++    try:
++        return max(int(raw_size), 1)
++    except ValueError:
++        return 32
++
++
++def _embedding_device() -> str | None:
++    requested_device = os.environ.get("GMEMORY_EMBED_DEVICE")
++    if requested_device:
++        return requested_device
++    if torch is not None and torch.cuda.is_available():
++        return "cuda"
++    return None
++
++
++def _resolve_embedding_model(model_type: str) -> str:
++    requested_model_path = os.environ.get("GMEMORY_EMBED_MODEL_PATH")
++    if requested_model_path and os.path.exists(requested_model_path):
++        return requested_model_path
++
++    if model_type == "sentence-transformers/all-MiniLM-L6-v2":
++        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++        local_model_path = os.path.join(repo_root, "models", "all-MiniLM-L6-v2")
++        if os.path.exists(os.path.join(local_model_path, "modules.json")):
++            return local_model_path
++
++    return model_type
++
++
++def _to_list(embedding):
++    if hasattr(embedding, "detach"):
++        embedding = embedding.detach().cpu()
++    if hasattr(embedding, "tolist"):
++        return embedding.tolist()
++    return list(embedding)
+ 
+ @dataclass
+ class EmbeddingFunc:
+@@ -57,15 +111,82 @@ class EmbeddingFunc:
+     model_type: str = "sentence-transformers/all-MiniLM-L6-v2"
+ 
+     def __post_init__(self):
+-        if self.model_type not in _EMBEDDING_MODEL_CACHE:
+-            _EMBEDDING_MODEL_CACHE[self.model_type] = SentenceTransformer(self.model_type)
+-
+-        self.func: SentenceTransformer = _EMBEDDING_MODEL_CACHE[self.model_type]
++        self.resolved_model_type = _resolve_embedding_model(self.model_type)
++        self.device = _embedding_device()
++        self.batch_size = _embedding_batch_size()
++        cache_key = (self.resolved_model_type, self.device or "auto")
++
++        if cache_key not in _EMBEDDING_MODEL_CACHE:
++            kwargs = {"device": self.device} if self.device else {}
++            _EMBEDDING_MODEL_CACHE[cache_key] = SentenceTransformer(self.resolved_model_type, **kwargs)
++
++        self.func: SentenceTransformer = _EMBEDDING_MODEL_CACHE[cache_key]
++
++    def _cache_key(self, text: str) -> tuple[str, str]:
++        return (self.resolved_model_type, text)
++
++    def _get_cached(self, text: str) -> list | None:
++        cache_size = _embedding_cache_size()
++        if cache_size == 0:
++            return None
++        key = self._cache_key(text)
++        vector = _EMBEDDING_VECTOR_CACHE.get(key)
++        if vector is not None:
++            _EMBEDDING_VECTOR_CACHE.move_to_end(key)
++        return vector
++
++    def _set_cached(self, text: str, vector: list) -> None:
++        cache_size = _embedding_cache_size()
++        if cache_size == 0:
++            return
++        key = self._cache_key(text)
++        _EMBEDDING_VECTOR_CACHE[key] = vector
++        _EMBEDDING_VECTOR_CACHE.move_to_end(key)
++        while len(_EMBEDDING_VECTOR_CACHE) > cache_size:
++            _EMBEDDING_VECTOR_CACHE.popitem(last=False)
+ 
+     def embed_documents(self, texts: list[str]) -> list[list]:
+-        return [self.func.encode(text).tolist() for text in texts]
++        if not texts:
++            return []
++
++        results: list[list | None] = [None] * len(texts)
++        missing_texts: list[str] = []
++        missing_positions: dict[str, list[int]] = {}
++
++        for idx, text in enumerate(texts):
++            cached = self._get_cached(text)
++            if cached is not None:
++                results[idx] = cached
++                continue
++            if text not in missing_positions:
++                missing_texts.append(text)
++                missing_positions[text] = []
++            missing_positions[text].append(idx)
++
++        if missing_texts:
++            embeddings = self.func.encode(
++                missing_texts,
++                batch_size=self.batch_size,
++                show_progress_bar=False,
++            )
++            for text, embedding in zip(missing_texts, embeddings):
++                vector = _to_list(embedding)
++                self._set_cached(text, vector)
++                for idx in missing_positions[text]:
++                    results[idx] = vector
++
++        return [vector for vector in results if vector is not None]
+ 
+     def embed_query(self, query: str) -> list:
+-        return self.func.encode(query).tolist()
+-
+-
++        cached = self._get_cached(query)
++        if cached is not None:
++            return cached
++        vector = _to_list(
++            self.func.encode(
++                query,
++                batch_size=self.batch_size,
++                show_progress_bar=False,
++            )
++        )
++        self._set_cached(query, vector)
++        return vector
+diff --git a/requirements.txt b/requirements.txt
+index ff7e002..594a3e4 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -27,3 +27,4 @@ sentence_transformers==3.4.1
+ skimage==0.0
+ tqdm==4.66.5
+ wikipedia==1.4.0
++click==8.2.1

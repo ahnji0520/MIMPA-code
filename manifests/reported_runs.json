@@ -1,0 +1,8 @@
+{
+  "main": {
+    "shared": "data/results/main_v2/shared/seed42_n100_s10_k3_r2/<model_slug>",
+    "gmemory": "data/results/main_v2/gmemory/seed42_n100_s10_k3_r2_t1_i3_embed/<model_slug>"
+  },
+  "auditor": "data/results/transcript_audit_v2/seed42_n100_s10_k3_r2/gpt_5_4_nano",
+  "note": "Raw model transcripts and API audit logs are intentionally excluded."
+}

@@ -1,0 +1,7 @@
+{
+  "model": "gpt-5.4-nano",
+  "backend": "openai",
+  "reasoning_effort": "low",
+  "sampling_parameters_sent": false,
+  "api_key_environment_variable": "OPENAI_API_KEY"
+}

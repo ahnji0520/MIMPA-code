@@ -1,0 +1,7 @@
+# API-backed experiments and G-Memory integration
+numpy
+pandas
+pyarrow
+chromadb==0.6.3
+sentence-transformers==3.4.1
+transformers==4.57.6

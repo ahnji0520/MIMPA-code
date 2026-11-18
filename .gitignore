@@ -1,0 +1,9 @@
+.env
+*.pyc
+__pycache__/
+.pytest_cache/
+runtime/
+data/results/**/api_calls.jsonl
+data/results/**/episode_*/
+third_party/framework/GMemory/.venv/
+third_party/framework/GMemory/.db/

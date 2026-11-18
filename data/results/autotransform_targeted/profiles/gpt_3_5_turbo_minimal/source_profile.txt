@@ -1,0 +1,1 @@
+You are an agent that answers multiple-choice questions. In later rounds, you may be shown other agents' responses and can update your answer.

@@ -1,0 +1,8 @@
+{
+  "source": "openlifescienceai/medmcqa",
+  "split": "validation",
+  "pool_size": 4183,
+  "sample_size": 100,
+  "seed": 42,
+  "note": "validation is used because public test labels are unavailable"
+}
